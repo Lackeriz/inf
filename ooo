@@ -1,0 +1,259 @@
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local MainEndpoint = "https://games.roblox.com/v1/games/606849621/servers/Public?sortOrder=Asc&limit=100"
+local CurrentEndpoint = MainEndpoint
+local ServerIds = {}
+local FoundId = ""
+
+local selected_home = "HomeHideaway"
+
+local home_positions = {
+    ["HomeHideaway"] = Vector3.new(1106, 47, -4040),
+    ["HomeBeachHouse"] = Vector3.new(2524, 24, -3438)
+}
+
+spawn(function()
+    if isfile("tempdata.rbx") then
+      StoredIds = HttpService:JSONDecode(readfile("tempdata.rbx"))
+      if #StoredIds > 10 then
+        writefile("tempdata.rbx", "")
+        StoredIds = ServerIds
+      end
+    
+      ServerIds = HttpService:JSONDecode(StoredIds)
+    end
+end)
+
+function Search(Link)
+    local Json = HttpService:JSONDecode(game:HttpGet(Link))
+    
+    for _, Server in pairs(Json.data) do
+        if not Server.maxPlayers or Server.playing < 2 or not Server.ping then
+            continue
+        end
+        
+        if not table.find(ServerIds, Server.id) and Server.playing < 25 then
+            table.foreach(Server, print)
+            table.insert(ServerIds, Server.id)
+            writefile("tempdata.rbx", HttpService:JSONEncode(ServerIds))
+            FoundId = Server.id
+            break
+        end
+    end
+
+    return Json.nextPageCursor
+end
+
+function Teleport()
+  while FoundId == "" do
+    task.wait()
+    local NextEndpoint = Search(CurrentEndpoint)
+    CurrentEndpoint = MainEndpoint.. "&cursor=".. NextEndpoint
+  end
+
+  print('Teleporting', game.PlaceId, FoundId)
+  TeleportService:TeleportToPlaceInstance(game.PlaceId, FoundId)
+  FoundId = ""
+  
+  task.wait(3)
+  Teleport()
+end
+
+local loade = false
+spawn(function()
+    task.wait(60)
+    if not loade then
+        print('Game Load Fail.')
+        Teleport()
+    end
+end)
+
+if loaded_dupe then return end
+getgenv().loaded_dupe = true
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+if not game.Players.LocalPlayer.Character then
+    while not game.Players.LocalPlayer.Character do
+        task.wait()
+    end
+    
+    task.wait(1)
+end
+
+loade = true
+spawn(function()
+    task.wait(60)
+    print('Backup Teleport Module.')
+    Teleport()
+end)
+
+-- unused
+function InitNetwork()
+    local TeamSwitch = require(game.ReplicatedStorage.TeamSelect.TeamChooseUI)
+
+    local Network = {
+        Remote = getupvalue(getupvalue(getupvalue(TeamSwitch.Init, 1).FireServer, 1), 2),
+        Actions = getupvalue(getupvalue(getupvalue(TeamSwitch.Init, 1).FireServer, 1), 3),
+        FireServer = debug.getupvalue(TeamSwitch.Init, 1).FireServer,
+        Events = debug.getupvalue(TeamSwitch.Init, 2),
+
+        WaitFor = function(Data, Event)
+            local Bind = Instance.new("BindableEvent")
+            local EventData
+            
+            local Connection = Data.Remote.OnClientEvent:Connect(function(RecvEvent, ...)
+                local ReturnData = false
+                if RecvEvent == Event then ReturnData = true end
+                local EventArgs = {...}
+                
+                if type(Event) == 'table' and type(EventArgs[1]) == 'table' and rawget(EventArgs[1], Event[1]) then
+                    ReturnData = true
+                end
+                
+                if ReturnData then
+                    EventData = {...}
+                    Bind:Fire() 
+                end
+            end)
+
+            Bind.Event:Wait()
+            Connection:Disconnect()
+            return unpack(EventData)
+        end
+    }
+
+    return Network
+end
+
+local opened = {}
+function findSafe(enum)
+    local safes = require(game.ReplicatedStorage.App.store)._state.safesInventoryItems
+    
+    for _, v in safes do
+        if v.typeEnum == enum and not table.find(opened, v.itemOwnedId) then
+            table.insert(opened, v.itemOwnedId)
+            return v
+        end
+    end
+end
+
+local Bind = Instance.new('BindableEvent')
+local Connection = game.ReplicatedStorage.RewardSpinnerSpin.OnClientEvent:Connect(function(data)
+    Bind:Fire(data.items[data.winIndex])
+end)
+
+local collect = game.ReplicatedStorage.RewardSpinnerCollectReward
+local old_namecall
+
+local CollectedReward = Instance.new('BindableEvent')
+old_namecall = hookmetamethod(game, '__namecall', function(...)
+    local method = getnamecallmethod()
+    local self = ...
+    
+    if self == collect and method == "FireServer" then
+        local result = old_namecall(...)
+        CollectedReward:Fire()
+        return result
+    end
+    
+    return old_namecall(...)
+end)
+
+game.Players.LocalPlayer:RequestStreamAroundAsync(home_positions[selected_home])
+workspace:WaitForChild(selected_home)
+
+getgenv().dataloss = true
+queue_on_teleport([[
+    loadfile('dupe_safes.lua')()
+]])
+
+function teamSwitch()
+    local BigButtonService = require(game.ReplicatedStorage.App.BigButtonService)
+    for _, v in BigButtonService.active do
+        if v.name == 'TeamSwitch' then
+            local protos = getprotos(v.onClick)
+            local onYes = protos[1]
+            setupvalue(onYes, 2, getupvalue(v.onClick, 3))
+            
+            onYes()
+            break
+        end
+    end
+end
+
+function joinPrisoner()
+    local TeamUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild('TeamSelectGui')
+    if not TeamUI then teamSwitch()
+        while not TeamUI do
+            TeamUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild('TeamSelectGui')
+            task.wait()
+        end
+    end
+    
+    local CriminalTeam = TeamUI:FindFirstChild('CriminalTeam', true)
+    firesignal(CriminalTeam.Activated)
+end
+
+local claimer = true
+spawn(joinPrisoner)
+task.wait(0.3)
+
+spawn(function()
+    while claimer do task.wait(0.4)
+        if not game.Players.LocalPlayer.Character then continue end
+        game.Players.LocalPlayer.Character:WaitForChild('HumanoidRootPart').CFrame = CFrame.new(home_positions[selected_home])
+        game.Players.LocalPlayer.Character:WaitForChild('Head'):Destroy()
+        workspace[selected_home].HomeClaim:FireServer(true)
+    end
+end)
+
+local Sign = workspace[selected_home].SaleSign.Sign.SurfaceGui
+while not string.find(Sign.TextLabel.Text, game.Players.LocalPlayer.DisplayName) do
+    if string.lower(Sign.TextLabel.Text) ~= 'for sale!' then
+        return Teleport()
+    end
+    
+    task.wait()
+end
+
+print('Claimed.') claimer = false
+workspace[selected_home].SetSavedSettingRemote:FireServer('Leaked', Vector3.zero)
+print('Dataloss.')
+
+local wait = false
+for i = 1, 3 do
+    game.ReplicatedStorage.SafePurchaseRemote:FireServer(5)
+    if wait then
+        CollectedReward.Event:Wait()
+    end
+    
+    print('Opening Safe', i, 'of 3')
+    local attempt = findSafe(5)
+    while not attempt do task.wait()
+        attempt = findSafe(5)
+    end
+    
+    game.ReplicatedStorage.SafeOpenRemote:FireServer(attempt.itemOwnedId)
+    local EventItem = Bind.Event:Wait()
+    
+    if EventItem.RarityId == 5 then
+        workspace[selected_home].SetSavedSettingRemote:FireServer('Leaked', 'lol funy script')
+        print('Received Generous Donation!')
+        table.foreach(EventItem, print)
+        getgenv().dataloss = nil
+        
+        CollectedReward.Event:Wait()
+        task.wait(7.5)
+        break
+    end
+    
+    table.foreach(EventItem, print)
+    wait = true
+end
+
+Connection:Disconnect()
+getgenv().dataloss = nil
+Teleport()
